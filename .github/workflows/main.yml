@@ -1,9 +1,8 @@
-name: LOCKED IN - Android AAB Build
+name: LOCKED IN AAB Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -11,11 +10,10 @@ permissions:
 
 jobs:
   build:
-    name: Build Android App Bundle
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -30,38 +28,32 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Initialize Android Project
-        working-directory: locked_in
+      - name: Check Project
+        run: |
+          pwd
+          ls -la
+          test -f pubspec.yaml
+
+      - name: Initialize Android
         run: |
           chmod +x setup.sh
           ./setup.sh
 
-      - name: Build Release AAB
-        working-directory: locked_in
-        run: |
-          flutter pub get
-          flutter build appbundle --release
+      - name: Build AAB
+        run: flutter build appbundle --release
 
-      - name: Prepare Release
-        run: |
-          mkdir -p release
-          cp locked_in/build/app/outputs/bundle/release/app-release.aab \
-          release/LOCKED-IN-${GITHUB_RUN_NUMBER}.aab
-
-      - name: Upload AAB Artifact
+      - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: LOCKED-IN-AAB
-          path: release/*.aab
+          path: build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="build-${GITHUB_RUN_NUMBER}"
-
-          gh release create "$TAG" \
-            release/*.aab \
-            --title "LOCKED IN ${TAG}" \
-            --notes "Automated Android App Bundle build."
+          gh release create "build-${GITHUB_RUN_NUMBER}" \
+            build/app/outputs/bundle/release/app-release.aab \
+            --title "LOCKED IN Build ${GITHUB_RUN_NUMBER}" \
+            --notes "Automated Android AAB build."
