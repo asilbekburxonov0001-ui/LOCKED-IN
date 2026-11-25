@@ -1,8 +1,9 @@
-name: LOCKED IN AAB Build
+name: LOCKED IN Android AAB
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,8 +14,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Extract Android Project
+        run: |
+          unzip -o locked_in_android.zip -d extracted
+          ls -la extracted/locked_in
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -28,32 +34,31 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Check Project
-        run: |
-          pwd
-          ls -la
-          test -f pubspec.yaml
-
-      - name: Initialize Android
+      - name: Initialize Flutter Android
+        working-directory: extracted/locked_in
         run: |
           chmod +x setup.sh
           ./setup.sh
 
-      - name: Build AAB
-        run: flutter build appbundle --release
+      - name: Build Release AAB
+        working-directory: extracted/locked_in
+        run: |
+          flutter build appbundle --release
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: LOCKED-IN-AAB
-          path: build/app/outputs/bundle/release/app-release.aab
+          path: extracted/locked_in/build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      - name: Create Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "build-${GITHUB_RUN_NUMBER}" \
-            build/app/outputs/bundle/release/app-release.aab \
-            --title "LOCKED IN Build ${GITHUB_RUN_NUMBER}" \
-            --notes "Automated Android AAB build."
+          TAG="build-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" \
+            extracted/locked_in/build/app/outputs/bundle/release/app-release.aab \
+            --title "LOCKED IN ${TAG}" \
+            --notes "Automated Android AAB build"
