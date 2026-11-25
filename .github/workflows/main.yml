@@ -1,4 +1,4 @@
-name: Build Android AAB
+name: LOCKED IN - Android AAB Build
 
 on:
   push:
@@ -11,10 +11,11 @@ permissions:
 
 jobs:
   build:
+    name: Build Android App Bundle
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -23,30 +24,44 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
-      - name: Build AAB
+      - name: Initialize Android Project
+        working-directory: locked_in
         run: |
-          chmod +x gradlew
-          ./gradlew bundleRelease
+          chmod +x setup.sh
+          ./setup.sh
 
-      - name: Prepare AAB
+      - name: Build Release AAB
+        working-directory: locked_in
+        run: |
+          flutter pub get
+          flutter build appbundle --release
+
+      - name: Prepare Release
         run: |
           mkdir -p release
-          cp app/build/outputs/bundle/release/*.aab release/APP-${GITHUB_RUN_NUMBER}.aab
+          cp locked_in/build/app/outputs/bundle/release/app-release.aab \
+          release/LOCKED-IN-${GITHUB_RUN_NUMBER}.aab
 
-      - name: Upload AAB
+      - name: Upload AAB Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Android-AAB
+          name: LOCKED-IN-AAB
           path: release/*.aab
+          retention-days: 30
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "build-${GITHUB_RUN_NUMBER}" \
+          TAG="build-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" \
             release/*.aab \
-            --title "Android Build ${GITHUB_RUN_NUMBER}" \
-            --notes "Automated Android AAB build"
+            --title "LOCKED IN ${TAG}" \
+            --notes "Automated Android App Bundle build."
