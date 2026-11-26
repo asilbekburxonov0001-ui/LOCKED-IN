@@ -1,64 +1,36 @@
-name: LOCKED IN Android AAB
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
+name: build-aab
+on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Extract Android Project
-        run: |
-          unzip -o locked_in_android.zip -d extracted
-          ls -la extracted/locked_in
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - run: ./setup.sh
+      - run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/upload.jks
+          printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=upload\nstoreFile=upload.jks\n" "${{ secrets.KS_PASS }}" "${{ secrets.KS_PASS }}" > android/key.properties
+          python3 - <<'EOF'
+          p='android/app/build.gradle.kts'
+          s=open(p).read()
+          blk='''    signingConfigs {
+                  create("release") {
+                      val k = java.util.Properties().apply { load(java.io.FileInputStream(rootProject.file("key.properties"))) }
+                      keyAlias = k["keyAlias"] as String
+                      keyPassword = k["keyPassword"] as String
+                      storeFile = file(k["storeFile"] as String)
+                      storePassword = k["storePassword"] as String
+                  }
+              }
+              buildTypes {'''
+          s=s.replace('    buildTypes {',blk,1).replace('signingConfigs.getByName("debug")','signingConfigs.getByName("release")')
+          open(p,'w').write(s)
+          EOF
+      - run: flutter build appbundle --release
+      - uses: actions/upload-artifact@v4
         with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Initialize Flutter Android
-        working-directory: extracted/locked_in
-        run: |
-          chmod +x setup.sh
-          ./setup.sh
-
-      - name: Build Release AAB
-        working-directory: extracted/locked_in
-        run: |
-          flutter build appbundle --release
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: LOCKED-IN-AAB
-          path: extracted/locked_in/build/app/outputs/bundle/release/app-release.aab
-          retention-days: 30
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="build-${GITHUB_RUN_NUMBER}"
-
-          gh release create "$TAG" \
-            extracted/locked_in/build/app/outputs/bundle/release/app-release.aab \
-            --title "LOCKED IN ${TAG}" \
-            --notes "Automated Android AAB build"
+          name: aab
+          path: build/app/outputs/bundle/release/app-release.aab
