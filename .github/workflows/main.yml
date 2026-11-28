@@ -1,36 +1,138 @@
-name: build-aab
-on: workflow_dispatch
+name: Build signed AAB
+
+on:
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 17 }
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - uses: subosito/flutter-action@v2
-        with: { channel: stable }
-      - run: ./setup.sh
-      - run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/upload.jks
-          printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=upload\nstoreFile=upload.jks\n" "${{ secrets.KS_PASS }}" "${{ secrets.KS_PASS }}" > android/key.properties
-          python3 - <<'EOF'
-          p='android/app/build.gradle.kts'
-          s=open(p).read()
-          blk='''    signingConfigs {
+        with:
+          channel: stable
+          cache: true
+
+      - name: Find project folder
+        run: |
+          f=$(find . -maxdepth 3 -name pubspec.yaml -not -path "./_gen/*" | head -n1)
+          if [ -z "$f" ]; then echo "::error::pubspec.yaml topilmadi"; exit 1; fi
+          echo "PD=$(dirname "$f")" >> "$GITHUB_ENV"
+
+      - name: Check signing secrets
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ]; then
+            echo "::error::KEYSTORE_BASE64 yoki KEYSTORE_PASSWORD secret yo'q. Avval 'Create upload keystore' workflow'ni ishga tushiring."
+            exit 1
+          fi
+
+      - name: Generate Android scaffolding (Gradle files)
+        working-directory: ${{ env.PD }}
+        run: |
+          flutter create --org com.lockedin --project-name locked_in --platforms android _gen
+          cp -rn _gen/. .
+          rm -rf _gen test
+
+      - name: Set up release signing
+        working-directory: ${{ env.PD }}
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KS_B64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<PROPS
+          storePassword=$KS_PASS
+          keyPassword=$KS_PASS
+          keyAlias=upload
+          storeFile=$PWD/android/app/upload-keystore.jks
+          PROPS
+
+          if [ -f android/app/build.gradle.kts ]; then
+            cat >> android/app/build.gradle.kts <<'KTS'
+
+          // ---- release signing (added by CI) ----
+          val lockedKsProps = java.util.Properties()
+          val lockedKsFile = rootProject.file("key.properties")
+          if (lockedKsFile.exists()) {
+              lockedKsFile.inputStream().use { lockedKsProps.load(it) }
+          }
+          android {
+              signingConfigs {
                   create("release") {
-                      val k = java.util.Properties().apply { load(java.io.FileInputStream(rootProject.file("key.properties"))) }
-                      keyAlias = k["keyAlias"] as String
-                      keyPassword = k["keyPassword"] as String
-                      storeFile = file(k["storeFile"] as String)
-                      storePassword = k["storePassword"] as String
+                      keyAlias = lockedKsProps["keyAlias"] as String?
+                      keyPassword = lockedKsProps["keyPassword"] as String?
+                      storeFile = (lockedKsProps["storeFile"] as String?)?.let { file(it) }
+                      storePassword = lockedKsProps["storePassword"] as String?
                   }
               }
-              buildTypes {'''
-          s=s.replace('    buildTypes {',blk,1).replace('signingConfigs.getByName("debug")','signingConfigs.getByName("release")')
-          open(p,'w').write(s)
-          EOF
-      - run: flutter build appbundle --release
-      - uses: actions/upload-artifact@v4
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+          }
+          KTS
+          elif [ -f android/app/build.gradle ]; then
+            cat >> android/app/build.gradle <<'GRADLE'
+
+          // ---- release signing (added by CI) ----
+          def lockedKsProps = new Properties()
+          def lockedKsFile = rootProject.file("key.properties")
+          if (lockedKsFile.exists()) {
+              lockedKsFile.withInputStream { lockedKsProps.load(it) }
+          }
+          android {
+              signingConfigs {
+                  release {
+                      keyAlias lockedKsProps['keyAlias']
+                      keyPassword lockedKsProps['keyPassword']
+                      storeFile lockedKsProps['storeFile'] ? file(lockedKsProps['storeFile']) : null
+                      storePassword lockedKsProps['storePassword']
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          GRADLE
+          else
+            echo "::error::android/app/build.gradle(.kts) topilmadi"; exit 1
+          fi
+
+      - name: flutter pub get
+        working-directory: ${{ env.PD }}
+        run: flutter pub get
+
+      - name: Build release AAB
+        working-directory: ${{ env.PD }}
+        run: flutter build appbundle --release --build-number=${{ github.run_number }}
+
+      - name: Verify AAB is NOT debug-signed
+        working-directory: ${{ env.PD }}
+        run: |
+          AAB=build/app/outputs/bundle/release/app-release.aab
+          ls -lh "$AAB"
+          keytool -printcert -jarfile "$AAB" | tee sig.txt
+          if grep -qi "Android Debug" sig.txt; then
+            echo "::error::AAB hali ham debug kalit bilan imzolangan"; exit 1
+          fi
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
         with:
-          name: aab
-          path: build/app/outputs/bundle/release/app-release.aab
+          name: locked-in-release-aab
+          path: ${{ env.PD }}/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+          
