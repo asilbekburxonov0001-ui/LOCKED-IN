@@ -22,6 +22,11 @@ jobs:
 
       - name: Find project folder
         run: |
+          if [ -z "$(find . -maxdepth 3 -name pubspec.yaml -not -path './_gen/*' | head -n1)" ]; then
+            for z in *.zip; do
+              if [ -f "$z" ]; then echo "Unzipping $z"; unzip -oq "$z"; fi
+            done
+          fi
           f=$(find . -maxdepth 3 -name pubspec.yaml -not -path "./_gen/*" | head -n1)
           if [ -z "$f" ]; then echo "::error::pubspec.yaml topilmadi"; exit 1; fi
           echo "PD=$(dirname "$f")" >> "$GITHUB_ENV"
